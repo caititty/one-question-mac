@@ -5,9 +5,9 @@ import OneQuestionCore
 
 enum Keychain {
     private static let service = "local.onequestion.mac.ai"
-    static func read(allowInteraction: Bool = true) throws -> String {
+    static func read(account: String = "api-key", allowInteraction: Bool = true) throws -> String {
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service, kSecAttrAccount as String: "api-key",
+            kSecAttrService as String: service, kSecAttrAccount as String: account,
             kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         if !allowInteraction {
             let context = LAContext(); context.interactionNotAllowed = true
@@ -22,19 +22,12 @@ enum Keychain {
         guard status == errSecSuccess, let data = result as? Data else { throw AppFailure("无法读取钥匙串中的 API 密钥（\(status)）。") }
         return String(data: data, encoding: .utf8) ?? ""
     }
-    static func save(_ key: String) throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service, kSecAttrAccount as String: "api-key"]
-        if key.isEmpty {
-            let status = SecItemDelete(query as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else { throw AppFailure("无法移除 API 密钥。") }
-            return
-        }
-        let data = Data(key.utf8)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var item = query; item[kSecValueData as String] = data
-            guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw AppFailure("无法将 API 密钥保存到钥匙串。") }
-        } else if status != errSecSuccess { throw AppFailure("更新钥匙串密钥失败。") }
+    /// New immutable items avoid requesting access to an old build's protected item.
+    static func create(_ key: String, account: String) throws {
+        let item: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: account,
+            kSecAttrLabel as String: "一题 AI 接口密钥", kSecValueData as String: Data(key.utf8)]
+        let status = SecItemAdd(item as CFDictionary, nil)
+        guard status == errSecSuccess else { throw AppFailure("钥匙串保存失败（\(status)）。") }
     }
 }

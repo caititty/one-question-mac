@@ -20,8 +20,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>一题</string>
   <key>CFBundleDisplayName</key><string>一题</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.3.0</string>
-  <key>CFBundleVersion</key><string>3</string>
+  <key>CFBundleShortVersionString</key><string>0.3.1</string>
+  <key>CFBundleVersion</key><string>4</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -43,6 +43,6 @@ if [ "${1:-}" = "--dmg" ]; then
     mkdir -p "$STAGING"
     ditto "$APP" "$STAGING/一题.app"
     ln -sfn /Applications "$STAGING/Applications"
-    hdiutil create -volname "一题" -srcfolder "$STAGING" -ov -format UDZO "$TASK_ROOT/dist/一题-0.3-arm64.dmg"
+    hdiutil create -volname "一题" -srcfolder "$STAGING" -ov -format UDZO "$TASK_ROOT/dist/一题-0.3.1-arm64.dmg"
 fi
 printf 'App: %s\n' "$APP"

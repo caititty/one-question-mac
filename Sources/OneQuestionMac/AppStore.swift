@@ -28,10 +28,13 @@ import OneQuestionCore
     private var drafts: [String: String] = [:]
     private var draftTask: Task<Void, Never>?
     private var evaluationTask: Task<Void, Never>?
+    private var evaluationID: UUID?
     private var importTask: Task<Void, Never>?
     private var importAnalysisTask: Task<Void, Never>?
     private var importAnalysisID: UUID?
     private var settingsObserver: NSObjectProtocol?
+    private var sessionKeys: [String: String] = [:]
+    private var unconfirmedCredentials = Set<String>()
     let dataDirectory: URL
 
     init() {
@@ -119,25 +122,28 @@ import OneQuestionCore
     func evaluateCurrent() {
         guard !isEvaluating, let attempt = currentAttempt else { return }
         guard settings.enabled else { errorMessage = "请先在设置中启用并配置 AI 评价。"; return }
-        let key: String
-        do { _ = try settings.requestURL(); key = try Keychain.read() } catch { errorMessage = error.localizedDescription; return }
+        do { _ = try settings.requestURL() } catch { errorMessage = error.localizedDescription; return }
         isEvaluating = true
+        let taskID = UUID(); evaluationID = taskID
         let configuration = settings
         evaluationTask = Task { [weak self] in
+            defer { if self?.evaluationID == taskID { self?.isEvaluating = false; self?.evaluationTask = nil } }
             do {
+                guard let self else { return }
+                let key = try await self.apiKey(for: configuration)
+                try Task.checkCancellation()
                 let result = try await AIClient.evaluate(question: attempt.question, answer: attempt.answer, settings: configuration, apiKey: key)
-                guard let self, !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.evaluationID == taskID else { return }
                 var updated = attempt; updated.evaluation = result; updated.selfRating = nil
                 try self.database?.save(attempt: updated)
                 if let i = self.attempts.firstIndex(where: { $0.id == attempt.id }) { self.attempts[i] = updated }
-                self.isEvaluating = false
             } catch {
-                guard let self else { return }; self.isEvaluating = false
+                guard let self, self.evaluationID == taskID else { return }
                 if !Task.isCancelled { self.errorMessage = error.localizedDescription }
             }
         }
     }
-    func cancelEvaluation() { evaluationTask?.cancel(); evaluationTask = nil; isEvaluating = false }
+    func cancelEvaluation() { evaluationTask?.cancel(); evaluationTask = nil; evaluationID = nil; isEvaluating = false }
     func rate(_ rating: String) {
         guard !isEvaluating, var attempt = currentAttempt else { return }
         attempt.selfRating = rating
@@ -151,10 +157,36 @@ import OneQuestionCore
         pinned.toggle()
         NSApp.windows.first(where: { $0.identifier?.rawValue == "practice-window" })?.level = pinned ? .floating : .normal
     }
-    func saveSettings(_ value: AISettings, key: String) throws {
-        if value.enabled { _ = try value.requestURL() }
+    func saveSettings(_ value: AISettings, key: String, withoutKey: Bool) async throws -> (message: String, warning: Bool) {
+        let prepared = try value.preparedForSaving(previous: settings, suppliedKey: key, withoutKey: withoutKey)
         guard let database else { throw AppFailure("本地数据库不可用。") }
-        try Keychain.save(key.trimmed); try database.set(value, for: "ai-settings"); settings = value
+        var warning: String?
+        if !key.trimmed.isEmpty, !withoutKey, let account = prepared.credentialAccount {
+            let supplied = key.trimmed
+            sessionKeys[account] = supplied
+            do {
+                try await BackgroundOperation.run(timeoutMessage: "钥匙串在 8 秒内未确认保存。") {
+                    try Keychain.create(supplied, account: account)
+                }
+                unconfirmedCredentials.remove(account)
+            } catch {
+                unconfirmedCredentials.insert(account); warning = error.localizedDescription
+            }
+        }
+        try database.set(prepared, for: "ai-settings"); settings = prepared
+        if let account = prepared.credentialAccount, unconfirmedCredentials.contains(account) {
+            return ("设置已生效。\(warning ?? "密钥尚未确认写入钥匙串。")当前运行可使用该密钥，重启后可能需要重新填写。", true)
+        }
+        return ("设置已保存并生效。" + (withoutKey ? "此接口不发送 API 密钥。" : key.trimmed.isEmpty ? "已保留原密钥。" : "新密钥已存入钥匙串。"), false)
+    }
+    private func apiKey(for configuration: AISettings) async throws -> String {
+        guard let account = configuration.credentialAccount else { return "" }
+        if let cached = sessionKeys[account] { return cached }
+        let key = try await BackgroundOperation.run(timeoutMessage: "钥匙串读取超时。请在 AI 设置中重新输入密钥并保存；应用不会覆盖已有题目。") {
+            try Keychain.read(account: account)
+        }
+        guard !key.isEmpty else { throw AppFailure("未找到此接口的密钥，请在 AI 设置中重新输入并保存。") }
+        sessionKeys[account] = key; return key
     }
     func reloadAISettings() {
         do {
@@ -213,8 +245,7 @@ import OneQuestionCore
     func cancelImport() { importProgress = "正在取消导入…"; importTask?.cancel() }
     func analyzeImport() {
         guard !isAnalyzingImport, let document = importDocument else { return }
-        let key: String
-        do { _ = try settings.requestURL(); key = try Keychain.read() }
+        do { _ = try settings.requestURL() }
         catch { importAIError = error.localizedDescription; return }
         let configuration = settings, taskID = UUID()
         importAnalysisID = taskID; isAnalyzingImport = true; importAIError = nil
@@ -226,6 +257,9 @@ import OneQuestionCore
                 }
             }
             do {
+                guard let self else { return }
+                let key = try await self.apiKey(for: configuration)
+                try Task.checkCancellation()
                 let result = try await AIImportAnalyzer.analyze(document: document, settings: configuration, apiKey: key) { [weak self] message in
                     Task { @MainActor in
                         guard self?.importAnalysisID == taskID else { return }
@@ -233,7 +267,7 @@ import OneQuestionCore
                     }
                 }
                 try Task.checkCancellation()
-                guard let self, self.importAnalysisID == taskID, self.showImportPreview,
+                guard self.importAnalysisID == taskID, self.showImportPreview,
                       self.importDocument?.id == document.id else { return }
                 self.importDocument = result
             } catch is CancellationError { }

@@ -111,7 +111,28 @@ public struct AISettings: Codable, Equatable {
     public var endpoint = ""
     public var model = ""
     public var jsonMode = true
+    /// nil keeps compatibility with v0.3's legacy item; empty means no API key.
+    public var credentialID: String?
     public init() {}
+    public var credentialAccount: String? {
+        guard credentialID != "" else { return nil }
+        return credentialID.map { "api-key-" + $0 } ?? "api-key"
+    }
+    public func preparedForSaving(previous: AISettings, suppliedKey: String, withoutKey: Bool) throws -> AISettings {
+        var result = self
+        if enabled { _ = try requestURL() }
+        if withoutKey { result.credentialID = "" }
+        else if !suppliedKey.trimmed.isEmpty { result.credentialID = UUID().uuidString }
+        else {
+            let oldHost = URL(string: previous.endpoint.trimmed)?.host?.lowercased()
+            let newHost = URL(string: endpoint.trimmed)?.host?.lowercased()
+            guard oldHost != nil, oldHost == newHost, previous.credentialAccount != nil else {
+                throw AppFailure("更换接口服务时，请输入对应 API 密钥，或选择“无需 API 密钥”。留空只会保留同一服务的已有密钥。")
+            }
+            result.credentialID = previous.credentialID
+        }
+        return result
+    }
     public func requestURL() throws -> URL {
         guard let url = URL(string: endpoint.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = url.scheme, let host = url.host,

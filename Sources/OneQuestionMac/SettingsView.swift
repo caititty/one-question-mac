@@ -8,14 +8,24 @@ struct SettingsView: View {
     @State private var key = ""
     @State private var message: String?
     @State private var isError = false
+    @State private var isSaving = false
+    @State private var isWarning = false
+    @State private var withoutKey = false
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
                 Section("AI 评价") {
                     Toggle("提交回答后自动评价", isOn: $settings.enabled)
-                    TextField("接口基础地址", text: $settings.endpoint, prompt: Text("https://你的接口地址/v1"))
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("接口基础地址")
+                        TextField("https://你的接口地址/v1", text: $settings.endpoint, axis: .vertical)
+                            .lineLimit(2...3).textFieldStyle(.roundedBorder)
+                    }
                     TextField("模型名称", text: $settings.model, prompt: Text("填写服务商提供的模型 ID"))
-                    SecureField("API 密钥", text: $key, prompt: Text("本地模型可留空"))
+                    SecureField("API 密钥", text: $key, prompt: Text("输入新密钥；留空保留已有密钥"))
+                        .disabled(withoutKey)
+                    Toggle("此接口无需 API 密钥", isOn: $withoutKey)
+                    Text("已有密钥不会自动读回显示。输入新密钥会保存为独立条目，留空保留同一服务的已有密钥。").font(.caption).foregroundStyle(.secondary)
                     Toggle("请求 JSON 模式", isOn: $settings.jsonMode)
                     Text("支持 Chat Completions 兼容接口。地址填写到 /v1，或填写完整 /chat/completions 路径。部分服务不支持 JSON 模式时可关闭。").font(.caption).foregroundStyle(.secondary)
                 }
@@ -28,22 +38,35 @@ struct SettingsView: View {
                         Button("打开导入模板") { NSWorkspace.shared.open(templateDirectory()) }
                     }
                 }
-                if let message { Text(message).foregroundStyle(isError ? Color.red : Color.secondary) }
-            }.formStyle(.grouped)
+            }.formStyle(.grouped).disabled(isSaving)
             Divider()
+            if let message {
+                Label(message, systemImage: isError ? "exclamationmark.circle" : isSaving ? "clock" : isWarning ? "exclamationmark.triangle" : "checkmark.circle.fill")
+                    .font(.callout).foregroundStyle(isError ? Color.red : isWarning ? Color.orange : isSaving ? Color.secondary : Color.green)
+                    .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    .padding(.horizontal, 18).padding(.top, 12)
+            }
             HStack {
-                Text("一题 · macOS 原生试用版 0.3").font(.caption).foregroundStyle(.secondary)
+                Text("一题 · macOS 原生试用版 0.3.1").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("保存设置") { save() }.buttonStyle(.borderedProminent).keyboardShortcut("s")
+                if isSaving { ProgressView().controlSize(.small) }
+                Button(isSaving ? "保存中…" : "保存设置") { save() }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(isSaving)
             }.padding(18)
-        }.frame(width: 590, height: 570)
+        }.frame(width: 620, height: 660)
         .onAppear {
-            settings = store.settings
-            do { key = try Keychain.read() } catch { message = error.localizedDescription; isError = true }
+            settings = store.settings; withoutKey = settings.credentialAccount == nil; key = ""
         }
     }
     private func save() {
-        do { try store.saveSettings(settings, key: key); message = "设置已保存。下一次提交会使用新配置。"; isError = false }
-        catch { message = error.localizedDescription; isError = true }
+        guard !isSaving else { return }
+        isSaving = true; isError = false; isWarning = false; message = "正在保存设置与密钥，请稍候…"
+        let configuration = settings, supplied = key, noKey = withoutKey
+        Task {
+            defer { isSaving = false }
+            do {
+                let outcome = try await store.saveSettings(configuration, key: supplied, withoutKey: noKey)
+                settings = store.settings; key = ""; message = outcome.message; isWarning = outcome.warning
+            } catch { message = error.localizedDescription; isError = true }
+        }
     }
 }
