@@ -24,11 +24,26 @@ import OneQuestionCore
                 print("模型：\(configuration.settings.model)")
                 return
             }
+            if arguments.contains("--test-import-ai") {
+                FileHandle.standardError.write(Data("正在读取 AI 配置…\n".utf8))
+                let db = try runtimeDatabase()
+                guard let settings = try db.get(AISettings.self, for: "ai-settings") else { throw AppFailure("尚未配置 AI。") }
+                FileHandle.standardError.write(Data("正在读取钥匙串密钥（不弹出授权窗口）…\n".utf8))
+                let key = try await Task.detached { try Keychain.read(allowInteraction: false) }.value
+                let document = ImportDocument(name: "公开示例", rows: [], sourceText: "【PDF第1页】\n1. 什么是线程？\n线程是进程中的执行单元，同一进程内的线程共享地址空间。\n2. 什么是数据库索引？\n索引是辅助查找的数据结构，能减少适用查询的扫描工作。")
+                FileHandle.standardError.write(Data("正在请求配置的模型…\n".utf8))
+                let result = try await AIImportAnalyzer.analyze(document: document, settings: settings, apiKey: key)
+                let report: [String: Any] = ["ok": true, "model": settings.model, "questions": result.rows.compactMap { row -> [String: String]? in
+                    guard let q = row.question else { return nil }; return ["title": q.title, "answer": q.referenceAnswer]
+                }]
+                print(String(decoding: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), as: UTF8.self))
+                return
+            }
             if arguments.contains("--test-ai") {
                 let db = try runtimeDatabase()
                 guard var settings = try db.get(AISettings.self, for: "ai-settings") else { throw AppFailure("尚未配置 AI。") }
                 if arguments.contains("--no-json-mode") { settings.jsonMode = false }
-                let key = try Keychain.read()
+                let key = try Keychain.read(allowInteraction: false)
                 let question = Samples.questions[0]
                 let answer = "== 对基本类型比较值，对引用类型判断是否是同一个对象。Object.equals 默认也是判断同一对象，类可以重写 equals 定义逻辑相等。String.equals 比较字符内容。"
                 let evaluation = try await AIClient.evaluate(question: question, answer: answer, settings: settings, apiKey: key)

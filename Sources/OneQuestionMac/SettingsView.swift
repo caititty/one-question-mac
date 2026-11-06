@@ -22,6 +22,7 @@ struct SettingsView: View {
                 Section("数据与隐私") {
                     Text("题库、草稿和作答记录保存在本机。API 密钥保存在 macOS 钥匙串中。")
                     Text("启用 AI 后，每次评价会将本题、参考答案、评分要点和本次回答发送到你配置的服务；不会发送整个题库。").font(.callout).foregroundStyle(.secondary)
+                    Text("主动使用 AI 整理时，会发送当前 PDF 的提取文字或所选题目文字，以区分问题与原文答案；本地 OCR 本身不联网。").font(.callout).foregroundStyle(.secondary)
                     HStack {
                         Button("打开数据目录") { NSWorkspace.shared.open(store.dataDirectory) }
                         Button("打开导入模板") { NSWorkspace.shared.open(templateDirectory()) }
@@ -31,7 +32,7 @@ struct SettingsView: View {
             }.formStyle(.grouped)
             Divider()
             HStack {
-                Text("一题 · macOS 原生试用版 0.2").font(.caption).foregroundStyle(.secondary)
+                Text("一题 · macOS 原生试用版 0.3").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("保存设置") { save() }.buttonStyle(.borderedProminent).keyboardShortcut("s")
             }.padding(18)

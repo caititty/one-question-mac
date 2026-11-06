@@ -16,6 +16,9 @@ import OneQuestionCore
     @Published var isEvaluating = false
     @Published var isImporting = false
     @Published var importProgress = ""
+    @Published var isAnalyzingImport = false
+    @Published var importAIProgress = ""
+    @Published var importAIError: String?
     @Published var importDocument: ImportDocument?
     @Published var showImportPreview = false
     @Published var errorMessage: String?
@@ -26,6 +29,8 @@ import OneQuestionCore
     private var draftTask: Task<Void, Never>?
     private var evaluationTask: Task<Void, Never>?
     private var importTask: Task<Void, Never>?
+    private var importAnalysisTask: Task<Void, Never>?
+    private var importAnalysisID: UUID?
     private var settingsObserver: NSObjectProtocol?
     let dataDirectory: URL
 
@@ -184,6 +189,7 @@ import OneQuestionCore
     }
     func loadImport(_ url: URL) {
         guard !isImporting else { return }
+        cancelImportAnalysis(); importAIError = nil
         isImporting = true; importProgress = "正在读取题库…"
         let access = url.startAccessingSecurityScopedResource()
         importTask = Task { [weak self] in
@@ -205,6 +211,48 @@ import OneQuestionCore
         }
     }
     func cancelImport() { importProgress = "正在取消导入…"; importTask?.cancel() }
+    func analyzeImport() {
+        guard !isAnalyzingImport, let document = importDocument else { return }
+        let key: String
+        do { _ = try settings.requestURL(); key = try Keychain.read() }
+        catch { importAIError = error.localizedDescription; return }
+        let configuration = settings, taskID = UUID()
+        importAnalysisID = taskID; isAnalyzingImport = true; importAIError = nil
+        importAIProgress = "正在请模型区分问题与原文答案…"
+        importAnalysisTask = Task { [weak self] in
+            defer {
+                if self?.importAnalysisID == taskID {
+                    self?.isAnalyzingImport = false; self?.importAIProgress = ""; self?.importAnalysisTask = nil
+                }
+            }
+            do {
+                let result = try await AIImportAnalyzer.analyze(document: document, settings: configuration, apiKey: key) { [weak self] message in
+                    Task { @MainActor in
+                        guard self?.importAnalysisID == taskID else { return }
+                        self?.importAIProgress = message
+                    }
+                }
+                try Task.checkCancellation()
+                guard let self, self.importAnalysisID == taskID, self.showImportPreview,
+                      self.importDocument?.id == document.id else { return }
+                self.importDocument = result
+            } catch is CancellationError { }
+            catch {
+                if self?.importAnalysisID == taskID { self?.importAIError = error.localizedDescription }
+            }
+        }
+    }
+    func cancelImportAnalysis() {
+        importAnalysisTask?.cancel(); importAnalysisTask = nil; importAnalysisID = nil
+        isAnalyzingImport = false; importAIProgress = ""
+    }
+    func prepareQuestionRepair(_ question: Question) {
+        guard !isAnalyzingImport, !isImporting, !isEvaluating else { return }
+        importDocument = ImportDocument(name: question.deck, rows: [ImportRow(line: 1, question: question)],
+            notice: "AI 整理结果会先预览；确认后更新当前题目并保留历史作答。", sourceText: question.title + "\n" + question.referenceAnswer,
+            repairTarget: question)
+        importAIError = nil; showImportPreview = true; analyzeImport()
+    }
     func updateImportRow(_ rowID: UUID, question: Question) {
         guard var document = importDocument, let index = document.rows.firstIndex(where: { $0.id == rowID }) else { return }
         document.rows[index].question = question
@@ -215,7 +263,7 @@ import OneQuestionCore
         questions.first(where: { $0.id == question.id }) ?? questions.first(where: { $0.fingerprint == question.fingerprint })
     }
     func commitImport(replaceExisting: Bool) {
-        guard let document = importDocument, let database else { return }
+        guard !isAnalyzingImport, let document = importDocument, let database else { return }
         do {
             var byID = Dictionary(uniqueKeysWithValues: questions.map { ($0.id, $0) })
             var byTitle = Dictionary(questions.map { ($0.fingerprint, $0.id) }, uniquingKeysWith: { first, _ in first })

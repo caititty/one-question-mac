@@ -138,12 +138,15 @@ public struct ImportRow: Identifiable {
 }
 
 public struct ImportDocument {
+    public let id = UUID()
     public var name: String
     public var rows: [ImportRow]
     public var notice: String?
     public var sourceText: String?
-    public init(name: String, rows: [ImportRow], notice: String? = nil, sourceText: String? = nil) {
+    public var repairTarget: Question?
+    public init(name: String, rows: [ImportRow], notice: String? = nil, sourceText: String? = nil, repairTarget: Question? = nil) {
         self.name = name; self.rows = rows; self.notice = notice; self.sourceText = sourceText
+        self.repairTarget = repairTarget
     }
 }
 

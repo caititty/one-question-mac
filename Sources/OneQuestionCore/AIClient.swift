@@ -3,10 +3,6 @@ import Foundation
 public enum AIClient {
     public static func evaluate(question: Question, answer: String, settings: AISettings, apiKey: String) async throws -> Evaluation {
         guard question.canEvaluate else { throw AppFailure("请先为本题补充参考答案。") }
-        let url = try settings.requestURL()
-        var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 90
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         let payload: [String: Any] = [
             "question": question.title, "referenceAnswer": question.referenceAnswer,
             "criteria": question.effectiveCriteria.map { ["id": $0.id, "text": $0.text, "weight": $0.weight] as [String: Any] },
@@ -22,8 +18,21 @@ public enum AIClient {
         每个评分要点必须出现且仅出现一次。earned 是 0 到该要点 weight 的整数；得分必须附原文证据。
         不要输出总分，由客户端求和。不要把尚未提及的内容当成候选人已经回答。请用简体中文反馈。
         """
+        let content = try await complete(instructions: instructions, input: source, settings: settings, apiKey: apiKey)
+        let evaluation: Evaluation
+        do { evaluation = try JSONDecoder().decode(Evaluation.self, from: Data(content.utf8)) }
+        catch { throw AppFailure("AI 未返回可解析的评分 JSON，请重试。") }
+        try evaluation.validate(for: question, answer: answer)
+        return evaluation
+    }
+
+    public static func complete(instructions: String, input: String, settings: AISettings, apiKey: String) async throws -> String {
+        let url = try settings.requestURL()
+        var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         var body: [String: Any] = ["model": settings.model.trimmed, "stream": false,
-            "messages": [["role": "system", "content": instructions], ["role": "user", "content": source]]]
+            "messages": [["role": "system", "content": instructions], ["role": "user", "content": input]]]
         if settings.jsonMode { body["response_format"] = ["type": "json_object"] }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = 90; config.timeoutIntervalForResource = 120
@@ -37,6 +46,9 @@ public enum AIClient {
                let error = body["error"] as? [String: Any] {
                 let message = (error["message"] as? String) ?? ""
                 let code = (error["code"] as? String) ?? ""
+                if code == "InvalidSubscription" {
+                    throw AppFailure("当前接口的 Coding Plan 未开通或已过期，请在服务商控制台恢复订阅后重试。")
+                }
                 detail = [code, message].filter { !$0.isEmpty }.joined(separator: "：")
                 if !apiKey.isEmpty { detail = detail.replacingOccurrences(of: apiKey, with: "[REDACTED]") }
                 detail = String(detail.prefix(900))
@@ -49,17 +61,13 @@ public enum AIClient {
               let message = choice["message"] as? [String: Any], var content = message["content"] as? String else {
             throw AppFailure("接口响应不符合 Chat Completions 格式。")
         }
-        if let reason = choice["finish_reason"] as? String, reason != "stop" { throw AppFailure("模型未完整输出评价（\(reason)），请重试或更换模型。") }
+        if let reason = choice["finish_reason"] as? String, reason != "stop" { throw AppFailure("模型未完整输出结果（\(reason)），请重试或更换模型。") }
         content = content.trimmed
         if content.hasPrefix("```") {
             var lines = content.components(separatedBy: .newlines); lines.removeFirst()
             if lines.last?.trimmed == "```" { lines.removeLast() }; content = lines.joined(separator: "\n")
         }
-        let evaluation: Evaluation
-        do { evaluation = try JSONDecoder().decode(Evaluation.self, from: Data(content.utf8)) }
-        catch { throw AppFailure("AI 未返回可解析的评分 JSON，请重试。") }
-        try evaluation.validate(for: question, answer: answer)
-        return evaluation
+        return content
     }
 }
 

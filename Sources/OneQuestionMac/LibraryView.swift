@@ -36,8 +36,12 @@ struct LibraryView: View {
                                 store.selectedDeck = "全部题库"; store.reviewOnly = false; store.choose(q.id); openWindow(id: "practice")
                             }.buttonStyle(.borderedProminent).disabled(store.isEvaluating)
                             Button("编辑") { editing = q }.disabled(store.isEvaluating)
+                            Button("AI 整理本题") {
+                                openWindow(id: "practice"); store.prepareQuestionRepair(q)
+                            }.disabled(store.isEvaluating || store.isImporting || store.isAnalyzingImport)
                             Button("删除…", role: .destructive) { deleting = q }.disabled(store.isEvaluating)
                         }
+                        Text("AI 整理会将本题文字发送到已配置模型，重新区分题目与原文答案；确认后才更新。").font(.caption).foregroundStyle(.secondary)
                         Divider()
                         Text("参考答案").font(.headline)
                         Text(q.referenceAnswer.isEmpty ? "尚未填写，补充后可用于自动评价。" : q.referenceAnswer).textSelection(.enabled)
@@ -157,9 +161,24 @@ struct ImportPreviewView: View {
             }
             if store.importDocument?.sourceText != nil {
                 HStack {
-                    Label("PDF 导入 · 本地提取与识别", systemImage: "doc.text").font(.caption).foregroundStyle(.secondary)
+                    Label(store.importDocument?.repairTarget == nil ? "PDF 提取文字" : "已导入题目整理", systemImage: "doc.text").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("调整提取文字…") { editingSource = true }
+                    Button("调整提取文字…") { editingSource = true }.disabled(store.isAnalyzingImport)
+                    Button("AI 区分问题与答案") { store.analyzeImport() }.disabled(store.isAnalyzingImport)
+                }
+                Text("使用 \(store.settings.model.isEmpty ? "设置中的模型" : store.settings.model)。点击 AI 整理会发送本次提取文字；模型只选取原文，不补写答案。").font(.caption).foregroundStyle(.secondary)
+                if store.isAnalyzingImport {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text(store.importAIProgress).font(.callout).foregroundStyle(.secondary)
+                        Spacer(); Button("取消整理") { store.cancelImportAnalysis() }
+                    }
+                }
+                if let error = store.importAIError {
+                    HStack(alignment: .top) {
+                        Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                        Spacer(); ImportAISettingsButton()
+                    }
                 }
             }
             Divider()
@@ -171,6 +190,10 @@ struct ImportPreviewView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 if let q = row.question {
                                     Text(q.title).lineLimit(2)
+                                    if store.importDocument?.sourceText != nil {
+                                        Text(q.referenceAnswer.isEmpty ? "参考答案：原文未找到，待补充" : "参考答案：" + q.referenceAnswer)
+                                            .font(.callout).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+                                    }
                                     HStack {
                                         Text(q.category).foregroundStyle(.secondary)
                                         if let source = row.source { Text(source).foregroundStyle(.secondary) }
@@ -180,7 +203,7 @@ struct ImportPreviewView: View {
                                 } else { Text(row.issue ?? "无法读取").foregroundStyle(.red) }
                             }
                             Spacer()
-                            if row.question != nil { Button("编辑") { editingRow = row } }
+                            if row.question != nil { Button("编辑") { editingRow = row }.disabled(store.isAnalyzingImport) }
                         }.padding(.vertical, 12)
                         Divider()
                     }
@@ -189,18 +212,20 @@ struct ImportPreviewView: View {
             Picker("重复题", selection: $replaceExisting) {
                 Text("跳过已有题目").tag(false)
                 Text("更新题目，保留历史作答").tag(true)
-            }.pickerStyle(.segmented)
+            }.pickerStyle(.segmented).disabled(store.isAnalyzingImport)
             if invalid > 0 { Toggle("跳过错误行，只导入有效题目", isOn: $skipInvalid) }
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("取消") { store.cancelImportAnalysis(); dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("确认导入 \(valid) 题") { store.commitImport(replaceExisting: replaceExisting) }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(valid == 0 || (invalid > 0 && !skipInvalid))
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(store.isAnalyzingImport || valid == 0 || (invalid > 0 && !skipInvalid))
             }
         }.padding(24).frame(width: 740, height: 600)
         .onAppear {
             existingIDs = Set(store.questions.map(\.id)); existingTitles = Set(store.questions.map(\.fingerprint))
+            replaceExisting = store.importDocument?.repairTarget != nil
         }
+        .onDisappear { store.cancelImportAnalysis() }
         .sheet(item: $editingRow) { row in
             if let question = row.question {
                 QuestionEditor(question: question, onSave: { store.updateImportRow(row.id, question: $0) }).environmentObject(store)
@@ -211,6 +236,11 @@ struct ImportPreviewView: View {
                 .environmentObject(store)
         }
     }
+}
+
+private struct ImportAISettingsButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View { Button("AI 设置…") { openWindow(id: "preferences") } }
 }
 
 private struct PDFSourceEditor: View {
@@ -234,13 +264,27 @@ private struct PDFSourceEditor: View {
                 Spacer()
                 Button("重新识别题目") {
                     let source = text, deckName = name
+                    let originalDocumentID = store.importDocument?.id
+                    let repairTarget = store.importDocument?.repairTarget
                     parsing = true; error = nil
                     parsingTask = Task {
                         let worker = Task.detached(priority: .userInitiated) { try PDFQuestionImporter.parse(text: source, name: deckName) }
                         do {
-                            let doc = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                            var doc = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                             try Task.checkCancellation()
-                            store.importDocument = doc; parsing = false; dismiss()
+                            guard store.importDocument?.id == originalDocumentID else { throw AppFailure("导入预览已切换，请重新打开提取文字。") }
+                            if let original = repairTarget {
+                                doc.repairTarget = original
+                                for index in doc.rows.indices {
+                                    guard var question = doc.rows[index].question else { continue }
+                                    if index == 0 { question.id = original.id }
+                                    question.deck = original.deck; question.category = original.category; question.difficulty = original.difficulty
+                                    question.tags = original.tags; question.source = original.source
+                                    if question.fingerprint == original.fingerprint { question.criteria = original.criteria }
+                                    doc.rows[index].question = question
+                                }
+                            }
+                            store.importDocument = doc; store.importAIError = nil; parsing = false; dismiss()
                         } catch is CancellationError { parsing = false }
                         catch { self.error = error.localizedDescription; parsing = false }
                     }

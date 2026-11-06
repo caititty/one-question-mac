@@ -8,7 +8,8 @@ export SWIFTPM_CUSTOM_LIBS_DIR="$(python3 "$TASK_ROOT/scripts/prepare-toolchain.
 swift build -c release --disable-sandbox --cache-path "$TASK_ROOT/.swiftpm-cache" --config-path "$TASK_ROOT/.swiftpm-cache/config" --security-path "$TASK_ROOT/.swiftpm-cache/security" -Xswiftc -vfsoverlay -Xswiftc "$TASK_ROOT/.build/toolchain-overlay.json"
 APP="$TASK_ROOT/dist/一题.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$TASK_ROOT/.build/release/OneQuestion" "$APP/Contents/MacOS/OneQuestion"
+cp "$TASK_ROOT/.build/release/OneQuestion" "$APP/Contents/MacOS/.OneQuestion.next"
+mv -f "$APP/Contents/MacOS/.OneQuestion.next" "$APP/Contents/MacOS/OneQuestion"
 cp -R "$TASK_ROOT/Templates" "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -19,8 +20,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>一题</string>
   <key>CFBundleDisplayName</key><string>一题</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.2.0</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleShortVersionString</key><string>0.3.0</string>
+  <key>CFBundleVersion</key><string>3</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -42,6 +43,6 @@ if [ "${1:-}" = "--dmg" ]; then
     mkdir -p "$STAGING"
     ditto "$APP" "$STAGING/一题.app"
     ln -sfn /Applications "$STAGING/Applications"
-    hdiutil create -volname "一题" -srcfolder "$STAGING" -ov -format UDZO "$TASK_ROOT/dist/一题-0.2-arm64.dmg"
+    hdiutil create -volname "一题" -srcfolder "$STAGING" -ov -format UDZO "$TASK_ROOT/dist/一题-0.3-arm64.dmg"
 fi
 printf 'App: %s\n' "$APP"
