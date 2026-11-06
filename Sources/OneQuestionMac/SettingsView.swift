@@ -47,7 +47,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 18).padding(.top, 12)
             }
             HStack {
-                Text("一题 · macOS 原生试用版 0.3.1").font(.caption).foregroundStyle(.secondary)
+                Text("一题 · macOS 原生试用版 0.3.2").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if isSaving { ProgressView().controlSize(.small) }
                 Button(isSaving ? "保存中…" : "保存设置") { save() }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(isSaving)

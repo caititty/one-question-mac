@@ -165,10 +165,21 @@ public struct ImportDocument {
     public var notice: String?
     public var sourceText: String?
     public var repairTarget: Question?
+    public var unassignedExcerpts: [ImportExcerpt] = []
     public init(name: String, rows: [ImportRow], notice: String? = nil, sourceText: String? = nil, repairTarget: Question? = nil) {
         self.name = name; self.rows = rows; self.notice = notice; self.sourceText = sourceText
         self.repairTarget = repairTarget
     }
+}
+
+/// Nonempty source text that AI did not assign to any question or answer.
+/// Kept in the preview so skipped subquestions cannot disappear silently.
+public struct ImportExcerpt: Identifiable {
+    public var id: Int { startLine }
+    public let startLine: Int
+    public let endLine: Int
+    public let source: String?
+    public let text: String
 }
 
 public enum Samples {

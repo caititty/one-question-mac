@@ -115,4 +115,79 @@ struct AIImportTests {
         task.cancel()
         await #expect(throws: CancellationError.self) { try await task.value }
     }
+    @Test func everyInlineSubquestionRemainsInTheCard() async throws {
+        let doc = ImportDocument(name: "连续多问", rows: [], sourceText: "1. 什么是线程池？为什么要使用它？有哪些代价？线程池复用线程，减少创建开销，但需要管理队列和资源。")
+        let result = try await AIImportAnalyzer.analyze(document: doc) { _, input in
+            let payload = try #require(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let lines = try #require(payload["source_lines"] as? [[String: Any]])
+            #expect(lines.count == 4)
+            return #"{"questions":[{"question":[1,1],"question_parts":[[2,3]],"answers":[[4,4]]}]}"#
+        }
+        let question = try #require(result.rows.first?.question)
+        #expect(question.title == "什么是线程池？\n为什么要使用它？\n有哪些代价？")
+        #expect(question.referenceAnswer == "线程池复用线程，减少创建开销，但需要管理队列和资源。")
+        #expect(result.unassignedExcerpts.isEmpty)
+    }
+    @Test func interleavedSubquestionsAndAnswersStayTogetherAcrossPages() async throws {
+        let text = "【PDF第1页】\n1. 线程池综合题\n（1）什么是线程池？\n（1）线程池复用工作线程执行任务。\n【PDF第2页】\n（2）为什么使用线程池？\n（2）减少线程创建开销并限制并发数。\n（3）队列满了怎么办？"
+        let doc = ImportDocument(name: "复合题", rows: [], sourceText: text)
+        let result = try await AIImportAnalyzer.analyze(document: doc) { _, _ in
+            #"{"questions":[{"question":[1,1],"question_parts":[[2,2],[4,4],[6,6]],"answers":[[3,3],[5,5]],"note":"第3小问原文未提供答案"}]}"#
+        }
+        #expect(result.rows.count == 1)
+        let question = try #require(result.rows[0].question)
+        #expect(question.title == "线程池综合题\n（1）什么是线程池？\n（2）为什么使用线程池？\n（3）队列满了怎么办？")
+        #expect(!question.title.contains("工作线程"))
+        #expect(question.referenceAnswer == "（1）线程池复用工作线程执行任务。\n（2）减少线程创建开销并限制并发数。")
+        #expect(result.rows[0].warning?.contains("第3小问") == true)
+        #expect(question.source?.contains("题目第 1-2 页") == true)
+        #expect(result.unassignedExcerpts.isEmpty)
+    }
+    @Test func omittedFollowupAndAnswerAreExposedForReview() async throws {
+        let doc = ImportDocument(name: "遗漏", rows: [], sourceText: "【PDF第3页】\n1. 什么是线程池？\n线程池复用工作线程。\n追问：队列满了怎么办？\n执行拒绝策略。")
+        let result = try await AIImportAnalyzer.analyze(document: doc) { _, _ in
+            #"{"questions":[{"question":[1,1],"answers":[[2,2]],"note":"已整理"}]}"#
+        }
+        #expect(result.unassignedExcerpts.count == 1)
+        #expect(result.unassignedExcerpts[0].text == "追问：队列满了怎么办？\n执行拒绝策略。")
+        #expect(result.unassignedExcerpts[0].source == "第 3 页")
+        #expect(result.notice?.contains("未归类") == true)
+    }
+    @Test func subquestionRangesCannotUseAnswerLinesOrInventedLines() async throws {
+        let doc = ImportDocument(name: "冲突", rows: [], sourceText: "线程池综合题\n什么是线程池？\n线程池复用线程。")
+        await #expect(throws: AppFailure.self) {
+            try await AIImportAnalyzer.analyze(document: doc) { _, _ in
+                #"{"questions":[{"question":[1,1],"question_parts":[[2,3]],"answers":[[3,3]]}]}"#
+            }
+        }
+        await #expect(throws: AppFailure.self) {
+            try await AIImportAnalyzer.analyze(document: doc) { _, _ in
+                #"{"questions":[{"question":[1,1],"question_parts":[[99,99]],"answers":[[3,3]]}]}"#
+            }
+        }
+    }
+    @Test func laterChunksAppendSubquestionsToTheirOriginalParent() async throws {
+        let paragraphs = (1...12).map { "解释\($0)：" + String(repeating: "复用工作线程来处理任务", count: 3) }
+        let text = (["1. 线程池综合题", "（1）什么是线程池？"] + paragraphs + ["（2）为什么要使用它？", "减少创建开销并控制并发。"])
+        let doc = ImportDocument(name: "跨段多问", rows: [], sourceText: text.joined(separator: "\n"))
+        var calls = 0
+        let result = try await AIImportAnalyzer.analyze(document: doc, maximumChunkCharacters: 160) { _, input in
+            calls += 1
+            let payload = try #require(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let lines = try #require(payload["source_lines"] as? [[String: Any]])
+            let questionIDs = lines.filter { ($0["text"] as? String)?.contains("？") == true }.compactMap { $0["id"] as? Int }
+            let answerIDs = lines.compactMap { $0["id"] as? Int }.filter { $0 != 1 && !questionIDs.contains($0) }
+            if calls > 1 {
+                let known = try #require(payload["known_questions"] as? [[String: Any]])
+                #expect(known.first?["question_parts"] != nil)
+            }
+            let response: [String: Any] = ["questions": [["question": [1,1], "question_parts": questionIDs.map { [$0,$0] }, "answers": answerIDs.map { [$0,$0] }]]]
+            return String(decoding: try JSONSerialization.data(withJSONObject: response), as: UTF8.self)
+        }
+        #expect(calls > 1)
+        #expect(result.rows.count == 1)
+        #expect(result.rows[0].question?.title == "线程池综合题\n（1）什么是线程池？\n（2）为什么要使用它？")
+        #expect(result.rows[0].question?.referenceAnswer == (paragraphs + ["减少创建开销并控制并发。"]).joined(separator: "\n"))
+        #expect(result.unassignedExcerpts.isEmpty)
+    }
 }

@@ -33,16 +33,37 @@ import OneQuestionCore
                 print("模型：\(configuration.settings.model)")
                 return
             }
-            if arguments.contains("--test-import-ai") {
+            if arguments.contains("--test-import-ai") || arguments.contains("--test-import-ai-composite") {
+                let composite = arguments.contains("--test-import-ai-composite")
                 FileHandle.standardError.write(Data("正在读取 AI 配置…\n".utf8))
                 let db = try runtimeDatabase()
                 guard let settings = try db.aiSettings() else { throw AppFailure("尚未配置 AI。") }
                 FileHandle.standardError.write(Data("正在读取钥匙串密钥（不弹出授权窗口）…\n".utf8))
                 let key = try await readKey(for: settings)
-                let document = ImportDocument(name: "公开示例", rows: [], sourceText: "【PDF第1页】\n1. 什么是线程？\n线程是进程中的执行单元，同一进程内的线程共享地址空间。\n2. 什么是数据库索引？\n索引是辅助查找的数据结构，能减少适用查询的扫描工作。")
+                let source = composite ? """
+                【PDF第1页】
+                第1题：线程池综合题
+                （1）什么是线程池？
+                （1）线程池复用工作线程来执行任务。
+                （2）为什么使用线程池？
+                （2）减少线程创建开销，并限制并发线程数。
+                【PDF第2页】
+                （3）任务队列满了怎么办？
+                （3）根据配置执行拒绝策略，例如拒绝任务或由调用者执行。
+                第2题：什么是数据库索引？
+                索引是辅助查找的数据结构，可以减少适用查询的扫描工作。
+                """ : "【PDF第1页】\n1. 什么是线程？\n线程是进程中的执行单元，同一进程内的线程共享地址空间。\n2. 什么是数据库索引？\n索引是辅助查找的数据结构，能减少适用查询的扫描工作。"
+                let document = ImportDocument(name: "公开示例", rows: [], sourceText: source)
                 FileHandle.standardError.write(Data("正在请求配置的模型…\n".utf8))
                 let result = try await AIImportAnalyzer.analyze(document: document, settings: settings, apiKey: key)
-                let report: [String: Any] = ["ok": true, "model": settings.model, "questions": result.rows.compactMap { row -> [String: String]? in
+                if composite {
+                    guard result.rows.count == 2, let first = result.rows.first?.question,
+                          ["什么是线程池", "为什么使用线程池", "任务队列满了怎么办"].allSatisfy({ first.title.contains($0) }),
+                          ["复用工作线程", "减少线程创建开销", "执行拒绝策略"].allSatisfy({ first.referenceAnswer.contains($0) }),
+                          result.unassignedExcerpts.isEmpty else { throw AppFailure("复合题自检发现小问、答案或归类结果不完整。") }
+                }
+                let report: [String: Any] = ["ok": true, "model": settings.model, "unassignedCount": result.unassignedExcerpts.count,
+                    "compositeCheck": composite, "questions": result.rows.compactMap { row -> [String: String]? in
                     guard let q = row.question else { return nil }; return ["title": q.title, "answer": q.referenceAnswer]
                 }]
                 print(String(decoding: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), as: UTF8.self))

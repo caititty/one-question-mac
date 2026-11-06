@@ -90,6 +90,7 @@ public enum PDFQuestionImporter {
         var title: [String] = [], answer: [String] = [], points: [String] = []
         var mode = Section.question, page: Int?, firstPage: Int?, lastPage: Int?
         var firstLine = 1, inCode = false
+        var mainNumbering = "", pendingSubquestion: String?
         func flush() {
             let heading = title.joined(separator: "\n").trimmed
             guard !heading.isEmpty else { title = []; answer = []; points = []; return }
@@ -114,11 +115,12 @@ public enum PDFQuestionImporter {
                                  category: "PDF 导入", tags: ["PDF"], source: name + ".pdf" + (source.map { " · " + $0 } ?? ""))
                 rows.append(ImportRow(line: firstLine, question: q, warning: warning, source: source))
             }
-            title = []; answer = []; points = []; mode = .question
+            title = []; answer = []; points = []; mode = .question; pendingSubquestion = nil
         }
-        func start(_ heading: String, line: Int) {
+        func start(_ heading: String, line: Int, numbering: String = "explicit") {
             flush(); title = heading.isEmpty ? [] : [heading]; mode = .question
             firstLine = line; firstPage = page; lastPage = page
+            mainNumbering = numbering
         }
         // Keep a pending empty 题目: marker so its following line becomes the title.
         var pendingQuestion = false
@@ -133,21 +135,36 @@ public enum PDFQuestionImporter {
                     start(heading, line: offset + 1); pendingQuestion = heading.isEmpty; continue
                 }
                 if let heading = captures(#"^第[0-9一二三四五六七八九十百]+题\s*[:：.、]?\s*(.*)$"#, in: line)?.first {
-                    start(heading, line: offset + 1); pendingQuestion = heading.isEmpty; continue
+                    start(heading, line: offset + 1, numbering: "parent"); pendingQuestion = heading.isEmpty; continue
+                }
+                let nested = captures(#"^([（(][0-9]{1,4}[)）]|[0-9]+\.[0-9]+(?:[.、)）])?|[①-⑳])\s*(.+)$"#, in: line)
+                if let nested, !title.isEmpty, mainNumbering != "parenthesized",
+                   mode == .question || looksLikeQuestion(nested[1]) {
+                    title.append(line); mode = .question; pendingSubquestion = nested[0]; lastPage = page; continue
                 }
                 let numbered = captures(#"^(?:[0-9]{1,4}\s*[.、)）](?![0-9])\s*|[（(][0-9]{1,4}[)）]\s*|[一二三四五六七八九十]{1,3}[、.]\s*|Q[0-9]+\s*[:：.、]\s*)(.+)$"#, in: line)?.first
                 if let heading = numbered, mode == .question || looksLikeQuestion(heading) {
-                    start(heading, line: offset + 1); pendingQuestion = false; continue
+                    if !title.isEmpty, mainNumbering == "parent" {
+                        title.append(line); mode = .question
+                        pendingSubquestion = captures(#"^([0-9]{1,4}\s*[.、)）]|[一二三四五六七八九十]{1,3}[、.]|Q[0-9]+\s*[:：.、])"#, in: line)?.first
+                        lastPage = page; continue
+                    }
+                    let numbering = line.hasPrefix("(") || line.hasPrefix("（") ? "parenthesized" : "numbered"
+                    start(heading, line: offset + 1, numbering: numbering); pendingQuestion = false; continue
                 }
                 if let content = field(["参考答案", "标准答案", "答案", "解答", "解析", "答", "Answer", "A"], line: line), !title.isEmpty {
-                    mode = .answer; if !content.isEmpty { answer.append(content) }; lastPage = page; continue
+                    mode = .answer
+                    if let prefix = pendingSubquestion {
+                        answer.append(prefix + (content.isEmpty ? "" : " " + content)); pendingSubquestion = nil
+                    } else if !content.isEmpty { answer.append(content) }
+                    lastPage = page; continue
                 }
                 if let content = field(["评分要点", "得分点", "要点", "Key points"], line: line), !title.isEmpty {
                     mode = .criteria; if !content.isEmpty { points.append(content) }; lastPage = page; continue
                 }
                 if title.isEmpty, pendingQuestion, !line.isEmpty { title.append(line); pendingQuestion = false; lastPage = page; continue }
                 if title.isEmpty, looksLikeQuestion(line), line.hasSuffix("？") || line.hasSuffix("?") {
-                    start(line, line: offset + 1); continue
+                    start(line, line: offset + 1, numbering: "unnumbered"); continue
                 }
             }
             guard !title.isEmpty else { continue }

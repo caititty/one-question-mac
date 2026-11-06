@@ -92,7 +92,7 @@ struct QuestionEditor: View {
             Divider()
             Form {
                 Section("题目信息") {
-                    TextField("题目", text: $question.title, axis: .vertical).lineLimit(2...4)
+                    TextField("完整题干（包含所有小问）", text: $question.title, axis: .vertical).lineLimit(2...8)
                     TextField("题库", text: $question.deck)
                     TextField("分类", text: $question.category)
                     TextField("难度", text: $question.difficulty)
@@ -145,6 +145,9 @@ struct ImportPreviewView: View {
     @State private var existingTitles = Set<String>()
     @State private var editingRow: ImportRow?
     @State private var editingSource = false
+    @State private var reviewingUnassigned = false
+    @State private var reviewedUnassigned = false
+    @State private var expandedRows = Set<UUID>()
     private var rows: [ImportRow] { store.importDocument?.rows ?? [] }
     private var valid: Int { rows.filter { $0.question != nil }.count }
     private var invalid: Int { rows.count - valid }
@@ -166,7 +169,7 @@ struct ImportPreviewView: View {
                     Button("调整提取文字…") { editingSource = true }.disabled(store.isAnalyzingImport)
                     Button("AI 区分问题与答案") { store.analyzeImport() }.disabled(store.isAnalyzingImport)
                 }
-                Text("使用 \(store.settings.model.isEmpty ? "设置中的模型" : store.settings.model)。点击 AI 整理会发送本次提取文字；模型只选取原文，不补写答案。").font(.caption).foregroundStyle(.secondary)
+                Text("使用 \(store.settings.model.isEmpty ? "设置中的模型" : store.settings.model)。同一道大题的小问默认保留在一张卡片中；模型只选取原文，不补写答案。").font(.caption).foregroundStyle(.secondary)
                 if store.isAnalyzingImport {
                     HStack {
                         ProgressView().controlSize(.small)
@@ -181,6 +184,16 @@ struct ImportPreviewView: View {
                     }
                 }
             }
+            if let excerpts = store.importDocument?.unassignedExcerpts, !excerpts.isEmpty {
+                HStack {
+                    Label("\(excerpts.count) 段原文未归类，可能含遗漏的小问或答案", systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.orange)
+                    Spacer()
+                    Button("核对未归类文字…") { reviewingUnassigned = true }
+                }
+                Toggle("已核对未归类文字，可以导入当前题目", isOn: $reviewedUnassigned).font(.caption)
+                    .disabled(store.isAnalyzingImport)
+            }
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -189,10 +202,10 @@ struct ImportPreviewView: View {
                             Text("\(row.line)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 35, alignment: .trailing)
                             VStack(alignment: .leading, spacing: 5) {
                                 if let q = row.question {
-                                    Text(q.title).lineLimit(2)
+                                    Text(q.title).lineLimit(expandedRows.contains(row.id) ? nil : 2).textSelection(.enabled)
                                     if store.importDocument?.sourceText != nil {
                                         Text(q.referenceAnswer.isEmpty ? "参考答案：原文未找到，待补充" : "参考答案：" + q.referenceAnswer)
-                                            .font(.callout).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+                                            .font(.callout).foregroundStyle(.secondary).lineLimit(expandedRows.contains(row.id) ? nil : 3).textSelection(.enabled)
                                     }
                                     HStack {
                                         Text(q.category).foregroundStyle(.secondary)
@@ -203,7 +216,13 @@ struct ImportPreviewView: View {
                                 } else { Text(row.issue ?? "无法读取").foregroundStyle(.red) }
                             }
                             Spacer()
-                            if row.question != nil { Button("编辑") { editingRow = row }.disabled(store.isAnalyzingImport) }
+                            if row.question != nil {
+                                Button(expandedRows.contains(row.id) ? "收起" : "展开全文") {
+                                    if expandedRows.contains(row.id) { expandedRows.remove(row.id) }
+                                    else { expandedRows.insert(row.id) }
+                                }
+                                Button("编辑") { editingRow = row }.disabled(store.isAnalyzingImport)
+                            }
                         }.padding(.vertical, 12)
                         Divider()
                     }
@@ -217,8 +236,9 @@ struct ImportPreviewView: View {
             HStack {
                 Button("取消") { store.cancelImportAnalysis(); dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("确认导入 \(valid) 题") { store.commitImport(replaceExisting: replaceExisting) }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(store.isAnalyzingImport || valid == 0 || (invalid > 0 && !skipInvalid))
+                Button("确认导入 \(valid) 题") { store.commitImport(replaceExisting: replaceExisting, allowUnassigned: reviewedUnassigned) }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(store.isAnalyzingImport || valid == 0 || (invalid > 0 && !skipInvalid) || (!(store.importDocument?.unassignedExcerpts.isEmpty ?? true) && !reviewedUnassigned))
             }
         }.padding(24).frame(width: 740, height: 600)
         .onAppear {
@@ -226,6 +246,7 @@ struct ImportPreviewView: View {
             replaceExisting = store.importDocument?.repairTarget != nil
         }
         .onDisappear { store.cancelImportAnalysis() }
+        .onChange(of: store.isAnalyzingImport) { analyzing in if analyzing { reviewedUnassigned = false } }
         .sheet(item: $editingRow) { row in
             if let question = row.question {
                 QuestionEditor(question: question, onSave: { store.updateImportRow(row.id, question: $0) }).environmentObject(store)
@@ -235,6 +256,34 @@ struct ImportPreviewView: View {
             PDFSourceEditor(text: store.importDocument?.sourceText ?? "", name: store.importDocument?.name ?? "PDF题库")
                 .environmentObject(store)
         }
+        .sheet(isPresented: $reviewingUnassigned) {
+            UnassignedSourceView(excerpts: store.importDocument?.unassignedExcerpts ?? [])
+        }
+    }
+}
+
+private struct UnassignedSourceView: View {
+    @Environment(\.dismiss) private var dismiss
+    let excerpts: [ImportExcerpt]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("核对未归类原文").font(.title3.weight(.semibold))
+            Text("这些文字没有放入任何题干或答案，可能是页眉、说明，也可能是遗漏内容。发现小问或答案遗漏时，请返回调整提取文字或编辑题目，再确认导入。")
+                .font(.callout).foregroundStyle(.secondary)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(excerpts) { excerpt in
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text([excerpt.source, "整理文本第 \(excerpt.startLine)–\(excerpt.endLine) 行"].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(excerpt.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                            Divider()
+                        }
+                    }
+                }
+            }
+            HStack { Spacer(); Button("返回预览") { dismiss() }.keyboardShortcut(.cancelAction) }
+        }.padding(24).frame(width: 700, height: 560)
     }
 }
 

@@ -296,8 +296,11 @@ import OneQuestionCore
     func duplicate(for question: Question) -> Question? {
         questions.first(where: { $0.id == question.id }) ?? questions.first(where: { $0.fingerprint == question.fingerprint })
     }
-    func commitImport(replaceExisting: Bool) {
+    func commitImport(replaceExisting: Bool, allowUnassigned: Bool = false) {
         guard !isAnalyzingImport, let document = importDocument, let database else { return }
+        guard document.unassignedExcerpts.isEmpty || allowUnassigned else {
+            importAIError = "请先核对未归类原文，确认没有遗漏的小问或答案。"; return
+        }
         do {
             var byID = Dictionary(uniqueKeysWithValues: questions.map { ($0.id, $0) })
             var byTitle = Dictionary(questions.map { ($0.fingerprint, $0.id) }, uniquingKeysWith: { first, _ in first })

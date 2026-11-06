@@ -66,6 +66,41 @@ struct PDFImportTests {
         #expect(doc.sourceText == text)
         #expect(doc.notice?.contains("添加") == true)
     }
+    @Test func nestedQuestionsAndTheirAnswersRemainOneCard() throws {
+        let text = """
+        1. 线程池综合题
+        （1）什么是线程池？
+        答案：复用工作线程处理任务。
+        （2）为什么使用线程池？
+        答案：减少创建开销并控制并发。
+        2. 什么是索引？
+        答案：辅助查找的数据结构。
+        """
+        let doc = try PDFQuestionImporter.parse(text: text, name: "小问")
+        #expect(doc.rows.count == 2)
+        #expect(doc.rows[0].question?.title == "线程池综合题\n（1）什么是线程池？\n（2）为什么使用线程池？")
+        #expect(doc.rows[0].question?.referenceAnswer == "（1） 复用工作线程处理任务。\n（2） 减少创建开销并控制并发。")
+        #expect(doc.rows[1].question?.title == "什么是索引？")
+    }
+    @Test func explicitParentKeepsPlainAndDecimalSubquestions() throws {
+        let text = "第1题：线程池综合题\n1. 什么是线程池？\n答案：复用线程。\n2. 为什么使用它？\n答案：减少开销。\n2.1 如何限制并发？\n答案：限制线程数。\n第2题：什么是索引？\n答案：辅助查找的结构。"
+        let doc = try PDFQuestionImporter.parse(text: text, name: "层级")
+        #expect(doc.rows.count == 2)
+        let first = try #require(doc.rows[0].question)
+        #expect(first.title.contains("1. 什么是线程池？"))
+        #expect(first.title.contains("2. 为什么使用它？"))
+        #expect(first.title.contains("2.1 如何限制并发？"))
+        #expect(first.referenceAnswer == "1. 复用线程。\n2. 减少开销。\n2.1 限制线程数。")
+    }
+    @Test func independentParenthesizedQuestionsStillSplit() throws {
+        let doc = try PDFQuestionImporter.parse(text: "（1）什么是线程？\n答案：执行单元。\n（2）什么是进程？\n答案：资源分配单元。", name: "独立题")
+        #expect(doc.rows.count == 2)
+    }
+    @Test func explicitQuestionFollowedByNumberedIndependentQuestionStillSplits() throws {
+        let doc = try PDFQuestionImporter.parse(text: "题目：什么是线程？\n答案：执行单元。\n2. 什么是进程？\n答案：资源分配单元。", name: "混合题号")
+        #expect(doc.rows.count == 2)
+        #expect(doc.rows[1].question?.title == "什么是进程？")
+    }
     @Test func textPDFIsExtractedAcrossPages() throws {
         let url = try makePDF(pages: [
             ["1. What is reference equality?", "Answer: Both references identify the same object.", "The answer continues on the following page."],
