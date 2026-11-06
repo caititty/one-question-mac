@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "deckName": "我的导入题库",
+  "questions": [
+    {
+      "id": "template-equals",
+      "title": "Java 中，== 和 equals() 有什么区别？",
+      "referenceAnswer": "== 对基本类型比较值，对引用类型判断是否为同一对象。Object.equals 默认按对象身份判断，类可以重写它，例如 String 按字符内容比较。",
+      "criteria": [
+        {
+          "id": "identity",
+          "text": "区分值比较和对象身份比较",
+          "weight": 5
+        },
+        {
+          "id": "override",
+          "text": "解释 equals 的默认行为与重写",
+          "weight": 5
+        }
+      ],
+      "category": "Java 基础",
+      "difficulty": "基础",
+      "tags": [
+        "对象",
+        "相等性"
+      ],
+      "deck": "我的导入题库"
+    },
+    {
+      "id": "template-index",
+      "title": "数据库索引有哪些收益和代价？",
+      "referenceAnswer": "索引能减少适用查询需要扫描的数据。\n索引会占用空间，并增加写入时维护索引的成本，效果取决于查询条件与执行计划。",
+      "criteria": [
+        {
+          "id": "benefit",
+          "text": "解释减少扫描的收益",
+          "weight": 5
+        },
+        {
+          "id": "cost",
+          "text": "说明空间与写入维护成本",
+          "weight": 5
+        }
+      ],
+      "category": "数据库",
+      "difficulty": "基础",
+      "tags": [
+        "索引"
+      ],
+      "deck": "我的导入题库"
+    }
+  ]
+}

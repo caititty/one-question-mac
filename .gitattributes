@@ -1,0 +1,8 @@
+* text=auto
+*.swift text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.csv text eol=crlf whitespace=cr-at-eol
+*.xlsx binary
+*.png binary
