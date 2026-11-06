@@ -65,5 +65,19 @@ struct SettingsTests {
         let keyless = try changed.preparedForSaving(previous: previous, suppliedKey: "", withoutKey: true)
         #expect(keyless.credentialAccount == nil)
     }
+    @Test func legacyAppWritesCannotOverwriteNewCredentialReferences() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let db = try Database(url: directory.appendingPathComponent("settings.sqlite3"))
+        var legacy = AISettings(); legacy.endpoint = "https://first.example/v1"; legacy.model = "legacy"
+        try db.set(legacy, for: "ai-settings")
+        #expect(try db.aiSettings()?.model == "legacy")
+        var current = legacy; current.model = "current"; current.credentialID = UUID().uuidString
+        try db.saveAISettings(current)
+        // A still-running old app only knows the original preference key.
+        legacy.model = "old-app-wrote-again"; try db.set(legacy, for: "ai-settings")
+        #expect(try db.aiSettings()?.model == "current")
+        #expect(try db.aiSettings()?.credentialID == current.credentialID)
+    }
     private func isSignalled(_ semaphore: DispatchSemaphore) -> Bool { semaphore.wait(timeout: .now()) == .success }
 }

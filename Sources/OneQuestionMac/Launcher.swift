@@ -13,7 +13,7 @@ import OneQuestionCore
                 let configuration = try JSONDecoder().decode(ConfigurationInput.self, from: input)
                 _ = try configuration.settings.requestURL()
                 let db = try runtimeDatabase()
-                let previous = try db.get(AISettings.self, for: "ai-settings") ?? AISettings()
+                let previous = try db.aiSettings() ?? AISettings()
                 let supplied = configuration.apiKey.trimmed
                 let prepared = try configuration.settings.preparedForSaving(previous: previous, suppliedKey: supplied, withoutKey: supplied.isEmpty)
                 if let account = prepared.credentialAccount {
@@ -25,7 +25,9 @@ import OneQuestionCore
                     }
                     guard saved == supplied else { throw AppFailure("密钥保存后验证失败，配置未切换。") }
                 }
-                try db.set(prepared, for: "ai-settings")
+                try db.saveAISettings(prepared)
+                DistributedNotificationCenter.default().postNotificationName(
+                    Notification.Name("OneQuestionAISettingsV2Changed"), object: nil, userInfo: nil, deliverImmediately: true)
                 print("AI 配置已保存；钥匙串读回验证通过。")
                 print("接口：\(configuration.settings.endpoint)")
                 print("模型：\(configuration.settings.model)")
@@ -34,7 +36,7 @@ import OneQuestionCore
             if arguments.contains("--test-import-ai") {
                 FileHandle.standardError.write(Data("正在读取 AI 配置…\n".utf8))
                 let db = try runtimeDatabase()
-                guard let settings = try db.get(AISettings.self, for: "ai-settings") else { throw AppFailure("尚未配置 AI。") }
+                guard let settings = try db.aiSettings() else { throw AppFailure("尚未配置 AI。") }
                 FileHandle.standardError.write(Data("正在读取钥匙串密钥（不弹出授权窗口）…\n".utf8))
                 let key = try await readKey(for: settings)
                 let document = ImportDocument(name: "公开示例", rows: [], sourceText: "【PDF第1页】\n1. 什么是线程？\n线程是进程中的执行单元，同一进程内的线程共享地址空间。\n2. 什么是数据库索引？\n索引是辅助查找的数据结构，能减少适用查询的扫描工作。")
@@ -48,7 +50,7 @@ import OneQuestionCore
             }
             if arguments.contains("--test-ai") {
                 let db = try runtimeDatabase()
-                guard var settings = try db.get(AISettings.self, for: "ai-settings") else { throw AppFailure("尚未配置 AI。") }
+                guard var settings = try db.aiSettings() else { throw AppFailure("尚未配置 AI。") }
                 if arguments.contains("--no-json-mode") { settings.jsonMode = false }
                 let key = try await readKey(for: settings)
                 let question = Samples.questions[0]

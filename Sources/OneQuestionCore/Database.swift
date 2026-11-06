@@ -69,6 +69,10 @@ public final class Database {
     public func save(attempt: Attempt) throws { try write(attempt, id: attempt.id, table: "attempts") }
     public func set<T: Encodable>(_ value: T, for key: String) throws { try write(value, id: key, table: "preferences") }
     public func get<T: Decodable>(_ type: T.Type, for key: String) throws -> T? { try read(type, table: "preferences", id: key).first }
+    public func aiSettings() throws -> AISettings? {
+        try get(AISettings.self, for: "ai-settings-v2") ?? get(AISettings.self, for: "ai-settings")
+    }
+    public func saveAISettings(_ settings: AISettings) throws { try set(settings, for: "ai-settings-v2") }
     public func deleteQuestion(id: String) throws {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(handle, "DELETE FROM questions WHERE id=?", -1, &stmt, nil) == SQLITE_OK else { throw AppFailure("删除题目失败。") }

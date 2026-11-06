@@ -49,14 +49,14 @@ import OneQuestionCore
                 try db.save(questions: Samples.questions); try db.set(true, for: "initialized")
             }
             questions = try db.questions(); attempts = try db.attempts()
-            settings = try db.get(AISettings.self, for: "ai-settings") ?? AISettings()
+            settings = try db.aiSettings() ?? AISettings()
             drafts = try db.get([String: String].self, for: "drafts") ?? [:]
             let restored = try db.get(String.self, for: "selected-question")
             selectedID = questions.contains(where: { $0.id == restored }) ? restored : questions.first?.id
             draft = selectedID.flatMap { drafts[$0] } ?? ""
         } catch { errorMessage = "本地数据初始化失败：\(error.localizedDescription)" }
         settingsObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("OneQuestionAISettingsChanged"), object: nil, queue: .main) { [weak self] _ in
+            forName: Notification.Name("OneQuestionAISettingsV2Changed"), object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.reloadAISettings() }
             }
     }
@@ -173,7 +173,7 @@ import OneQuestionCore
                 unconfirmedCredentials.insert(account); warning = error.localizedDescription
             }
         }
-        try database.set(prepared, for: "ai-settings"); settings = prepared
+        try database.saveAISettings(prepared); settings = prepared
         if let account = prepared.credentialAccount, unconfirmedCredentials.contains(account) {
             return ("设置已生效。\(warning ?? "密钥尚未确认写入钥匙串。")当前运行可使用该密钥，重启后可能需要重新填写。", true)
         }
@@ -190,7 +190,7 @@ import OneQuestionCore
     }
     func reloadAISettings() {
         do {
-            if let value = try database?.get(AISettings.self, for: "ai-settings"), value != settings {
+            if let value = try database?.aiSettings(), value != settings {
                 settings = value; notice = "AI 配置已更新：\(value.model)。"
             }
         } catch { errorMessage = "读取 AI 配置失败：\(error.localizedDescription)" }
